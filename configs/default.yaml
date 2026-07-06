@@ -1,0 +1,23 @@
+data_dir: ~/.recond
+socket_path: ~/.recond/recond.sock
+default_profile: balanced
+
+profiles:
+  safe:
+    concurrency: 3
+    rate_limit: 10
+    cpu_max: 20
+    ram_max: 1GB
+    timeout: 30s
+  balanced:
+    concurrency: 10
+    rate_limit: 50
+    cpu_max: 50
+    ram_max: 2GB
+    timeout: 15s
+  aggressive:
+    concurrency: 25
+    rate_limit: 100
+    cpu_max: 80
+    ram_max: 4GB
+    timeout: 10s
