@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/recond/internal/models"
+	"github.com/toprakpt1/recond/internal/models"
 )
 
 func (s *Storage) CreateJob(ctx context.Context, job models.Job) error {

@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/recond/internal/models"
+	"github.com/toprakpt1/recond/internal/models"
 )
 
 func (s *Storage) CreateOutput(ctx context.Context, output models.Output) error {

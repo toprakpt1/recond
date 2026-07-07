@@ -15,9 +15,11 @@ type Profile struct {
 	CPUMax      int           `json:"cpu_max"`
 	RAMMax      string        `json:"ram_max"`
 	Timeout     time.Duration `json:"timeout"`
+	Wordlist    string        `json:"wordlist"`
 }
 
 func DefaultProfiles() map[string]Profile {
+	wordlist := "~/.recond/wordlists/common.txt"
 	return map[string]Profile{
 		"safe": {
 			Name:        "safe",
@@ -26,6 +28,7 @@ func DefaultProfiles() map[string]Profile {
 			CPUMax:      20,
 			RAMMax:      "1GB",
 			Timeout:     30 * time.Second,
+			Wordlist:    wordlist,
 		},
 		"balanced": {
 			Name:        "balanced",
@@ -34,6 +37,7 @@ func DefaultProfiles() map[string]Profile {
 			CPUMax:      50,
 			RAMMax:      "2GB",
 			Timeout:     15 * time.Second,
+			Wordlist:    wordlist,
 		},
 		"aggressive": {
 			Name:        "aggressive",
@@ -42,6 +46,7 @@ func DefaultProfiles() map[string]Profile {
 			CPUMax:      80,
 			RAMMax:      "4GB",
 			Timeout:     10 * time.Second,
+			Wordlist:    wordlist,
 		},
 	}
 }
@@ -85,6 +90,9 @@ func loadProfileFromConfig(name string, p Profile) Profile {
 	if v.IsSet(key+".timeout") {
 		p.Timeout = v.GetDuration(key + ".timeout")
 	}
+	if v.IsSet(key+".wordlist") {
+		p.Wordlist = v.GetString(key + ".wordlist")
+	}
 
 	p.Name = name
 	return p
@@ -120,6 +128,9 @@ func CreateProfile(name string, p Profile) error {
 	v.Set(key+".cpu_max", p.CPUMax)
 	v.Set(key+".ram_max", p.RAMMax)
 	v.Set(key+".timeout", p.Timeout.String())
+	if p.Wordlist != "" {
+		v.Set(key+".wordlist", p.Wordlist)
+	}
 
 	return v.WriteConfigAs(ConfigPath())
 }
@@ -136,6 +147,9 @@ func UpdateProfile(name string, p Profile) error {
 	v.Set(key+".cpu_max", p.CPUMax)
 	v.Set(key+".ram_max", p.RAMMax)
 	v.Set(key+".timeout", p.Timeout.String())
+	if p.Wordlist != "" {
+		v.Set(key+".wordlist", p.Wordlist)
+	}
 
 	return v.WriteConfigAs(ConfigPath())
 }

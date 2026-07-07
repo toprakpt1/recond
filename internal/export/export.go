@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/recond/internal/storage"
+	"github.com/toprakpt1/recond/internal/storage"
 )
 
 type Exporter struct {

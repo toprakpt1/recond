@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            suffix: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            suffix: ".exe"
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build recond
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -ldflags "-s -w \
+            -X github.com/toprakpt1/recond/internal/version.Version=${{ steps.version.outputs.VERSION }} \
+            -X github.com/toprakpt1/recond/internal/version.Commit=${{ github.sha }} \
+            -X github.com/toprakpt1/recond/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o recond${{ matrix.suffix }} ./cmd/recond
+
+      - name: Build recon
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -ldflags "-s -w \
+            -X github.com/toprakpt1/recond/internal/version.Version=${{ steps.version.outputs.VERSION }} \
+            -X github.com/toprakpt1/recond/internal/version.Commit=${{ github.sha }} \
+            -X github.com/toprakpt1/recond/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o recon${{ matrix.suffix }} ./cmd/recon
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          ARCHIVE_NAME="recond_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          tar czf "$ARCHIVE_NAME" recond${{ matrix.suffix }} recon${{ matrix.suffix }}
+          echo "ARCHIVE=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          ARCHIVE_NAME="recond_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          zip "$ARCHIVE_NAME" recond${{ matrix.suffix }} recon${{ matrix.suffix }}
+          echo "ARCHIVE=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recond_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: ${{ env.ARCHIVE }}
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

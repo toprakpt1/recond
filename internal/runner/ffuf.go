@@ -3,10 +3,14 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/toprakpt1/recond/pkg/utils"
 )
 
 type FfufRunner struct{}
@@ -31,7 +35,17 @@ func (r *FfufRunner) BuildCommand(opts RunOptions) ([]string, error) {
 
 	wordlist := opts.Wordlist
 	if wordlist == "" {
-		wordlist = "/usr/share/wordlists/dirb/common.txt"
+		wordlist = "~/.recond/wordlists/common.txt"
+	}
+	wordlist = expandPath(wordlist)
+
+	if _, err := os.Stat(wordlist); os.IsNotExist(err) {
+		log.Printf("[ffuf] wordlist not found, downloading: %s", wordlist)
+		url := "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt"
+		if err := utils.DownloadFile(url, wordlist); err != nil {
+			return nil, fmt.Errorf("wordlist not found and download failed: %w", err)
+		}
+		log.Printf("[ffuf] wordlist downloaded: %s", wordlist)
 	}
 	args = append(args, "-w", wordlist)
 
@@ -92,4 +106,12 @@ func (r *FfufRunner) ParseOutput(data []byte) ([]string, error) {
 	}
 
 	return results, nil
+}
+
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }

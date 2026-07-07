@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/recond/internal/daemon"
+	"github.com/toprakpt1/recond/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

@@ -1,4 +1,4 @@
-module github.com/recond
+module github.com/toprakpt1/recond
 
 go 1.26.4
 

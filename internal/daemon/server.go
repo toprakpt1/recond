@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/recond/internal/config"
-	"github.com/recond/internal/models"
-	"github.com/recond/internal/pipeline"
-	"github.com/recond/internal/runner"
-	"github.com/recond/internal/storage"
-	templatepkg "github.com/recond/internal/template"
+	"github.com/toprakpt1/recond/internal/config"
+	"github.com/toprakpt1/recond/internal/models"
+	"github.com/toprakpt1/recond/internal/pipeline"
+	"github.com/toprakpt1/recond/internal/runner"
+	"github.com/toprakpt1/recond/internal/storage"
+	templatepkg "github.com/toprakpt1/recond/internal/template"
 	"gopkg.in/yaml.v3"
 )
 

@@ -14,6 +14,7 @@ type Config struct {
 	DefaultProfile string `mapstructure:"default_profile"`
 	MaxRetries     int    `mapstructure:"max_retries"`
 	RetryBackoff   string `mapstructure:"retry_backoff"`
+	Wordlist       string `mapstructure:"wordlist"`
 }
 
 var v *viper.Viper
@@ -31,6 +32,7 @@ func Init() error {
 	v.SetDefault("default_profile", "balanced")
 	v.SetDefault("max_retries", 3)
 	v.SetDefault("retry_backoff", "2s")
+	v.SetDefault("wordlist", "~/.recond/wordlists/common.txt")
 
 	v.SetEnvPrefix("RECOND")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -106,6 +108,7 @@ socket_path: ~/.recond/recond.sock
 default_profile: balanced
 max_retries: 3
 retry_backoff: 2s
+wordlist: ~/.recond/wordlists/common.txt
 
 profiles:
   safe:

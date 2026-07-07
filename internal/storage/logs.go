@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/recond/internal/models"
+	"github.com/toprakpt1/recond/internal/models"
 )
 
 func (s *Storage) InsertLog(ctx context.Context, logEntry models.Log) error {

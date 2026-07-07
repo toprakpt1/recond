@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/recond/internal/daemon"
+	"github.com/toprakpt1/recond/internal/daemon"
 )
 
 func main() {

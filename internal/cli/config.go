@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/recond/internal/config"
+	"github.com/toprakpt1/recond/internal/config"
 	"github.com/spf13/cobra"
 )
 

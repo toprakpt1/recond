@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/recond/internal/config"
-	"github.com/recond/internal/models"
-	"github.com/recond/internal/runner"
-	"github.com/recond/internal/storage"
+	"github.com/toprakpt1/recond/internal/config"
+	"github.com/toprakpt1/recond/internal/models"
+	"github.com/toprakpt1/recond/internal/runner"
+	"github.com/toprakpt1/recond/internal/storage"
 )
 
 var DefaultSteps = []models.StepDef{
@@ -156,6 +156,7 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 		Concurrency: p.profile.Concurrency,
 		RateLimit:   p.profile.RateLimit,
 		Timeout:     p.profile.Timeout,
+		Wordlist:    p.profile.Wordlist,
 	}
 
 	executor := runner.NewExecutor(r, opts)
