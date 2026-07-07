@@ -8,18 +8,23 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/recond/internal/config"
 	"github.com/recond/internal/models"
 	"github.com/recond/internal/pipeline"
+	"github.com/recond/internal/runner"
 	"github.com/recond/internal/storage"
+	templatepkg "github.com/recond/internal/template"
+	"gopkg.in/yaml.v3"
 )
 
 type Daemon struct {
 	store      *storage.Storage
 	cfg        *config.Config
+	registry   *runner.Registry
 	listener   net.Listener
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
@@ -45,6 +50,7 @@ func New() (*Daemon, error) {
 	return &Daemon{
 		store:      store,
 		cfg:        cfg,
+		registry:   runner.NewRegistry(),
 		activeJobs: make(map[string]context.CancelFunc),
 	}, nil
 }
@@ -154,6 +160,30 @@ func (d *Daemon) handleConnection(ctx context.Context, conn net.Conn) {
 		resp = d.handleList(ctx, req.Payload)
 	case "logs":
 		resp = d.handleLogs(ctx, req.Payload)
+	case "profiles":
+		resp = d.handleProfiles(ctx, req.Payload)
+	case "health":
+		resp = d.handleHealth(ctx)
+	case "export":
+		resp = d.handleExport(ctx, req.Payload)
+	case "outputs":
+		resp = d.handleOutputs(ctx, req.Payload)
+	case "templates":
+		resp = d.handleTemplates(ctx)
+	case "template-show":
+		resp = d.handleTemplateShow(ctx, req.Payload)
+	case "template-create":
+		resp = d.handleTemplateCreate(ctx, req.Payload)
+	case "template-delete":
+		resp = d.handleTemplateDelete(ctx, req.Payload)
+	case "delete":
+		resp = d.handleDelete(ctx, req.Payload)
+	case "delete-all":
+		resp = d.handleDeleteAll(ctx)
+	case "retry":
+		resp = d.handleRetry(ctx, req.Payload)
+	case "duplicate":
+		resp = d.handleDuplicate(ctx, req.Payload)
 	case "daemon-status":
 		resp = Response{Success: true, Data: map[string]interface{}{
 			"running":   true,
@@ -177,6 +207,11 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 	}
 	if req.Profile == "" {
 		req.Profile = d.cfg.DefaultProfile
+	}
+
+	profile, ok := config.GetProfile(req.Profile)
+	if !ok {
+		return Response{Error: fmt.Sprintf("profile '%s' not found", req.Profile)}
 	}
 
 	now := time.Now()
@@ -206,7 +241,7 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 	d.store.InsertLog(ctx, models.Log{
 		JobID:   jobID,
 		Level:   models.LogInfo,
-		Message: fmt.Sprintf("job created with profile: %s", req.Profile),
+		Message: fmt.Sprintf("job created with profile: %s (concurrency=%d, rate_limit=%d, timeout=%v)", req.Profile, profile.Concurrency, profile.RateLimit, profile.Timeout),
 	})
 
 	jobCtx, jobCancel := context.WithCancel(ctx)
@@ -223,7 +258,7 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, jobID)
+		p := pipeline.NewPipeline(d.store, jobID, profile)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), jobID, models.JobStatusPaused)
@@ -333,6 +368,8 @@ func (d *Daemon) handleResume(ctx context.Context, payload json.RawMessage) Resp
 	d.activeJobs[req.JobID] = jobCancel
 	d.mu.Unlock()
 
+	profile, _ := config.GetProfile(job.Profile)
+
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -342,7 +379,7 @@ func (d *Daemon) handleResume(ctx context.Context, payload json.RawMessage) Resp
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, req.JobID)
+		p := pipeline.NewPipeline(d.store, req.JobID, profile)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), req.JobID, models.JobStatusPaused)
@@ -475,9 +512,12 @@ func (d *Daemon) handleList(ctx context.Context, payload json.RawMessage) Respon
 
 func (d *Daemon) handleLogs(ctx context.Context, payload json.RawMessage) Response {
 	var req struct {
-		JobID string `json:"job_id"`
-		Level string `json:"level,omitempty"`
-		Limit int    `json:"limit,omitempty"`
+		JobID  string  `json:"job_id"`
+		Level  string  `json:"level,omitempty"`
+		Step   string  `json:"step,omitempty"`
+		Search string  `json:"search,omitempty"`
+		Limit  int     `json:"limit"`
+		After  float64 `json:"after,omitempty"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return Response{Error: "invalid payload: " + err.Error()}
@@ -489,11 +529,7 @@ func (d *Daemon) handleLogs(ctx context.Context, payload json.RawMessage) Respon
 	var logs []models.Log
 	var err error
 
-	if req.Level != "" {
-		logs, err = d.store.ListLogsWithLevel(ctx, req.JobID, models.LogLevel(req.Level), req.Limit)
-	} else {
-		logs, err = d.store.ListLogs(ctx, req.JobID, req.Limit)
-	}
+	logs, err = d.store.ListLogsFiltered(ctx, req.JobID, req.Level, req.Step, req.Search, int64(req.After), req.Limit)
 
 	if err != nil {
 		return Response{Error: "failed to get logs: " + err.Error()}
@@ -504,6 +540,516 @@ func (d *Daemon) handleLogs(ctx context.Context, payload json.RawMessage) Respon
 		Data: map[string]interface{}{
 			"logs":  logs,
 			"count": len(logs),
+		},
+	}
+}
+
+func (d *Daemon) handleHealth(ctx context.Context) Response {
+	activeJobs := make([]map[string]interface{}, 0)
+	d.mu.Lock()
+	for jobID := range d.activeJobs {
+		job, err := d.store.GetJob(ctx, jobID)
+		if err == nil {
+			activeJobs = append(activeJobs, map[string]interface{}{
+				"id":     job.ID,
+				"name":   job.Name,
+				"status": job.Status,
+			})
+		}
+	}
+	d.mu.Unlock()
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"running":     true,
+			"data_dir":    d.cfg.DataDir,
+			"socket_path": d.cfg.SocketPath,
+			"profile":     d.cfg.DefaultProfile,
+			"active_jobs": activeJobs,
+			"tool_status": d.registry.CheckTools(),
+		},
+	}
+}
+
+func (d *Daemon) handleProfiles(ctx context.Context, payload json.RawMessage) Response {
+	profiles := config.ListProfiles()
+
+	var profileList []map[string]interface{}
+	for _, p := range profiles {
+		profileList = append(profileList, map[string]interface{}{
+			"name":        p.Name,
+			"concurrency": p.Concurrency,
+			"rate_limit":  p.RateLimit,
+			"cpu_max":     p.CPUMax,
+			"ram_max":     p.RAMMax,
+			"timeout":     p.Timeout.String(),
+		})
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"profiles": profileList,
+			"count":    len(profileList),
+		},
+	}
+}
+
+func (d *Daemon) handleExport(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		JobID  string `json:"job_id"`
+		Type   string `json:"type"`
+		Format string `json:"format"`
+		Output string `json:"output,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	job, err := d.store.GetJob(ctx, req.JobID)
+	if err != nil {
+		return Response{Error: "job not found: " + err.Error()}
+	}
+
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".recond", "jobs", job.ID)
+
+	outputType := req.Type
+	if outputType == "" {
+		outputType = "all"
+	}
+
+	items, err := d.readOutputFile(dataDir, outputType)
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+
+	format := req.Format
+	if format == "" {
+		format = "text"
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"items": items,
+			"count": len(items),
+			"type":  outputType,
+			"format": format,
+		},
+	}
+}
+
+func (d *Daemon) readOutputFile(dataDir, outputType string) ([]string, error) {
+	var fileName string
+	switch outputType {
+	case "subdomains":
+		fileName = "subfinder.txt"
+	case "alive":
+		fileName = "httpx.txt"
+	case "urls":
+		fileName = "katana.txt"
+	case "directories":
+		fileName = "directories.json"
+	default:
+		return nil, fmt.Errorf("unknown output type: %s", outputType)
+	}
+
+	filePath := filepath.Join(dataDir, fileName)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("no %s output found", outputType)
+	}
+
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
+}
+
+func (d *Daemon) handleOutputs(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	job, err := d.store.GetJob(ctx, req.JobID)
+	if err != nil {
+		return Response{Error: "job not found: " + err.Error()}
+	}
+
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".recond", "jobs", job.ID)
+
+	var outputs []string
+	types := map[string]string{
+		"subdomains":  "subfinder.txt",
+		"alive":       "httpx.txt",
+		"crawled":     "katana.txt",
+		"urls":        "gau.txt",
+		"directories": "directories.json",
+	}
+
+	for name, file := range types {
+		path := filepath.Join(dataDir, file)
+		if _, err := os.Stat(path); err == nil {
+			data, _ := os.ReadFile(path)
+			lines := strings.Split(string(data), "\n")
+			count := 0
+			for _, l := range lines {
+				if strings.TrimSpace(l) != "" {
+					count++
+				}
+			}
+			outputs = append(outputs, fmt.Sprintf("%s: %d items (%s)", name, count, path))
+		}
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"outputs": outputs,
+			"count":   len(outputs),
+		},
+	}
+}
+
+func (d *Daemon) handleTemplates(ctx context.Context) Response {
+	templates, err := templatepkg.ListTemplates()
+	if err != nil {
+		templates = nil
+	}
+
+	var templateList []map[string]interface{}
+	for _, t := range templates {
+		templateList = append(templateList, map[string]interface{}{
+			"name":        t.Name,
+			"description": t.Description,
+			"steps":       len(t.Steps),
+		})
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"templates": templateList,
+			"count":     len(templateList),
+		},
+	}
+}
+
+func (d *Daemon) handleTemplateShow(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	t, err := templatepkg.LoadTemplate(req.Name)
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+
+	var steps []map[string]interface{}
+	for _, s := range t.Steps {
+		steps = append(steps, map[string]interface{}{
+			"name":      s.Name,
+			"tool":      s.Tool,
+			"order":     s.Order,
+			"parallel":  s.Parallel,
+		})
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"name":        t.Name,
+			"description": t.Description,
+			"steps":       steps,
+		},
+	}
+}
+
+func (d *Daemon) handleTemplateCreate(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		Name string `json:"name"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	var t templatepkg.Template
+	if err := yaml.Unmarshal([]byte(req.Data), &t); err != nil {
+		return Response{Error: "invalid template YAML: " + err.Error()}
+	}
+
+	if err := t.Validate(); err != nil {
+		return Response{Error: err.Error()}
+	}
+
+	if err := templatepkg.CreateTemplate(req.Name, &t); err != nil {
+		return Response{Error: err.Error()}
+	}
+
+	return Response{Success: true}
+}
+
+func (d *Daemon) handleTemplateDelete(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	if err := templatepkg.DeleteTemplate(req.Name); err != nil {
+		return Response{Error: err.Error()}
+	}
+
+	return Response{Success: true}
+}
+
+func (d *Daemon) handleDelete(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	job, err := d.store.GetJob(ctx, req.JobID)
+	if err != nil {
+		return Response{Error: "job not found: " + err.Error()}
+	}
+
+	if job.Status == models.JobStatusRunning {
+		if cancel, ok := d.activeJobs[req.JobID]; ok {
+			cancel()
+		}
+	}
+
+	if err := d.store.DeleteJob(ctx, req.JobID); err != nil {
+		return Response{Error: "failed to delete job: " + err.Error()}
+	}
+
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".recond", "jobs", req.JobID)
+	os.RemoveAll(dataDir)
+
+	return Response{Success: true}
+}
+
+func (d *Daemon) handleDeleteAll(ctx context.Context) Response {
+	jobs, err := d.store.ListJobs(ctx, "completed")
+	if err != nil {
+		return Response{Error: "failed to list jobs: " + err.Error()}
+	}
+
+	deleted := 0
+	for _, job := range jobs {
+		if err := d.store.DeleteJob(ctx, job.ID); err == nil {
+			home, _ := os.UserHomeDir()
+			dataDir := filepath.Join(home, ".recond", "jobs", job.ID)
+			os.RemoveAll(dataDir)
+			deleted++
+		}
+	}
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"deleted": deleted,
+		},
+	}
+}
+
+func (d *Daemon) handleRetry(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		JobID    string `json:"job_id"`
+		Profile  string `json:"profile,omitempty"`
+		FromStep string `json:"from_step,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	job, err := d.store.GetJob(ctx, req.JobID)
+	if err != nil {
+		return Response{Error: "job not found: " + err.Error()}
+	}
+
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = job.Profile
+	}
+
+	profile, ok := config.GetProfile(profileName)
+	if !ok {
+		return Response{Error: "profile not found: " + profileName}
+	}
+
+	now := time.Now()
+	newJobID := fmt.Sprintf("job-%x", now.UnixNano())
+
+	newJob := models.Job{
+		ID:        newJobID,
+		Name:      job.Name,
+		Target:    job.Target,
+		Status:    models.JobStatusRunning,
+		Profile:   profileName,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := d.store.CreateJob(ctx, newJob); err != nil {
+		return Response{Error: "failed to create job: " + err.Error()}
+	}
+
+	steps := pipeline.CreateSteps(newJobID)
+	for _, step := range steps {
+		if req.FromStep != "" && step.Name != req.FromStep {
+			step.Status = models.StepStatusCompleted
+		}
+		if err := d.store.CreateStep(ctx, step); err != nil {
+			return Response{Error: "failed to create step: " + err.Error()}
+		}
+	}
+
+	d.store.InsertLog(ctx, models.Log{
+		JobID:   newJobID,
+		Level:   models.LogInfo,
+		Message: fmt.Sprintf("job retried from %s (original: %s)", req.FromStep, req.JobID),
+	})
+
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	d.mu.Lock()
+	d.activeJobs[newJobID] = jobCancel
+	d.mu.Unlock()
+
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() {
+			d.mu.Lock()
+			delete(d.activeJobs, newJobID)
+			d.mu.Unlock()
+		}()
+
+		p := pipeline.NewPipeline(d.store, newJobID, profile)
+		if err := p.Execute(jobCtx); err != nil {
+			if err == context.Canceled {
+				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)
+			} else {
+				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusFailed)
+			}
+			return
+		}
+		d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusCompleted)
+	}()
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"new_job_id": newJobID,
+			"target":     job.Target,
+		},
+	}
+}
+
+func (d *Daemon) handleDuplicate(ctx context.Context, payload json.RawMessage) Response {
+	var req struct {
+		JobID   string `json:"job_id"`
+		Profile string `json:"profile,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return Response{Error: "invalid payload: " + err.Error()}
+	}
+
+	job, err := d.store.GetJob(ctx, req.JobID)
+	if err != nil {
+		return Response{Error: "job not found: " + err.Error()}
+	}
+
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = job.Profile
+	}
+
+	profile, ok := config.GetProfile(profileName)
+	if !ok {
+		return Response{Error: "profile not found: " + profileName}
+	}
+
+	now := time.Now()
+	newJobID := fmt.Sprintf("job-%x", now.UnixNano())
+
+	newJob := models.Job{
+		ID:        newJobID,
+		Name:      job.Name,
+		Target:    job.Target,
+		Status:    models.JobStatusRunning,
+		Profile:   profileName,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := d.store.CreateJob(ctx, newJob); err != nil {
+		return Response{Error: "failed to create job: " + err.Error()}
+	}
+
+	steps := pipeline.CreateSteps(newJobID)
+	for _, step := range steps {
+		if err := d.store.CreateStep(ctx, step); err != nil {
+			return Response{Error: "failed to create step: " + err.Error()}
+		}
+	}
+
+	d.store.InsertLog(ctx, models.Log{
+		JobID:   newJobID,
+		Level:   models.LogInfo,
+		Message: fmt.Sprintf("job duplicated from %s", req.JobID),
+	})
+
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	d.mu.Lock()
+	d.activeJobs[newJobID] = jobCancel
+	d.mu.Unlock()
+
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() {
+			d.mu.Lock()
+			delete(d.activeJobs, newJobID)
+			d.mu.Unlock()
+		}()
+
+		p := pipeline.NewPipeline(d.store, newJobID, profile)
+		if err := p.Execute(jobCtx); err != nil {
+			if err == context.Canceled {
+				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)
+			} else {
+				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusFailed)
+			}
+			return
+		}
+		d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusCompleted)
+	}()
+
+	return Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"new_job_id": newJobID,
+			"target":     job.Target,
 		},
 	}
 }

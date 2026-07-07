@@ -42,4 +42,11 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(exportCmd)
+	rootCmd.AddCommand(outputsCmd)
+	rootCmd.AddCommand(templatesCmd)
+	rootCmd.AddCommand(deleteCmd)
+	rootCmd.AddCommand(deleteAllCmd)
+	rootCmd.AddCommand(retryCmd)
+	rootCmd.AddCommand(duplicateCmd)
 }

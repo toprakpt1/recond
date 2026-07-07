@@ -12,6 +12,8 @@ type Config struct {
 	DataDir        string `mapstructure:"data_dir"`
 	SocketPath     string `mapstructure:"socket_path"`
 	DefaultProfile string `mapstructure:"default_profile"`
+	MaxRetries     int    `mapstructure:"max_retries"`
+	RetryBackoff   string `mapstructure:"retry_backoff"`
 }
 
 var v *viper.Viper
@@ -27,13 +29,14 @@ func Init() error {
 	v.SetDefault("data_dir", "~/.recond")
 	v.SetDefault("socket_path", "~/.recond/recond.sock")
 	v.SetDefault("default_profile", "balanced")
+	v.SetDefault("max_retries", 3)
+	v.SetDefault("retry_backoff", "2s")
 
 	v.SetEnvPrefix("RECOND")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	v.ReadInConfig()
-
 	v.WatchConfig()
 
 	return nil
@@ -57,13 +60,17 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
+func GetViper() *viper.Viper {
+	return v
+}
+
 func Get(key string) interface{} {
 	return v.Get(key)
 }
 
 func Set(key string, value interface{}) error {
 	v.Set(key, value)
-	return v.WriteConfig()
+	return v.WriteConfigAs(ConfigPath())
 }
 
 func expandPath(path string) string {
@@ -97,6 +104,8 @@ func WriteDefaultConfig() error {
 	cfg := `data_dir: ~/.recond
 socket_path: ~/.recond/recond.sock
 default_profile: balanced
+max_retries: 3
+retry_backoff: 2s
 
 profiles:
   safe:
@@ -124,4 +133,25 @@ profiles:
 
 func (c *Config) ResolvePath(sub string) string {
 	return filepath.Join(c.DataDir, sub)
+}
+
+func GetString(key, defaultValue string) string {
+	if v == nil {
+		return defaultValue
+	}
+	val := v.GetString(key)
+	if val == "" {
+		return defaultValue
+	}
+	return val
+}
+
+func GetInt(key string, defaultValue int) int {
+	if v == nil {
+		return defaultValue
+	}
+	if v.IsSet(key) {
+		return v.GetInt(key)
+	}
+	return defaultValue
 }

@@ -1,70 +1,62 @@
 package runner
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 type Registry struct {
 	runners map[string]Runner
-}
-
-var globalRegistry *Registry
-
-func init() {
-	globalRegistry = NewRegistry()
+	mu      sync.RWMutex
 }
 
 func NewRegistry() *Registry {
-	return &Registry{
+	r := &Registry{
 		runners: make(map[string]Runner),
 	}
+	r.Register(&SubfinderRunner{})
+	r.Register(&HttpxRunner{})
+	r.Register(&KatanaRunner{})
+	r.Register(&GauRunner{})
+	r.Register(&FfufRunner{})
+	return r
 }
 
 func (r *Registry) Register(runner Runner) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.runners[runner.Name()] = runner
 }
 
 func (r *Registry) Get(name string) (Runner, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	runner, ok := r.runners[name]
 	if !ok {
-		return nil, fmt.Errorf("runner not found: %s (available: %s)", name, r.Available())
+		return nil, fmt.Errorf("runner not found: %s", name)
 	}
 	return runner, nil
 }
 
-func (r *Registry) Available() string {
-	names := ""
+func (r *Registry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var names []string
 	for name := range r.runners {
-		if names != "" {
-			names += ", "
-		}
-		names += name
+		names = append(names, name)
 	}
 	return names
 }
 
-func (r *Registry) All() []Runner {
-	result := make([]Runner, 0, len(r.runners))
-	for _, runner := range r.runners {
-		result = append(result, runner)
+func (r *Registry) CheckTools() map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	status := make(map[string]bool)
+	for name, runner := range r.runners {
+		status[name] = runner.IsInstalled()
 	}
-	return result
-}
-
-func Register(runner Runner) {
-	globalRegistry.Register(runner)
-}
-
-func GetRunner(name string) (Runner, error) {
-	return globalRegistry.Get(name)
-}
-
-func AllRunners() []Runner {
-	return globalRegistry.All()
-}
-
-func init() {
-	Register(&SubfinderRunner{})
-	Register(&HttpxRunner{})
-	Register(&KatanaRunner{})
-	Register(&GauRunner{})
-	Register(&FfufRunner{})
+	return status
 }

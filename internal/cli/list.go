@@ -34,9 +34,13 @@ var listCmd = &cobra.Command{
 		}
 
 		data := resp.Data.(map[string]interface{})
-		jobs := data["jobs"].([]interface{})
+		jobsRaw, ok := data["jobs"].([]interface{})
+		if !ok || jobsRaw == nil {
+			fmt.Println("No jobs found")
+			return
+		}
 
-		if len(jobs) == 0 {
+		if len(jobsRaw) == 0 {
 			fmt.Println("No jobs found")
 			return
 		}
@@ -44,8 +48,11 @@ var listCmd = &cobra.Command{
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ID\tNAME\tSTATUS\tPROFILE\tCREATED")
 
-		for _, j := range jobs {
-			job := j.(map[string]interface{})
+		for _, j := range jobsRaw {
+			job, ok := j.(map[string]interface{})
+			if !ok {
+				continue
+			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				job["id"], job["name"], job["status"], job["profile"], job["created_at"])
 		}
