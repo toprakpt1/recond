@@ -1,12 +1,14 @@
 package pipeline
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/toprakpt1/recond/internal/config"
@@ -47,11 +49,17 @@ type Pipeline struct {
 	registry  *runner.Registry
 	outputDir string
 	profile   config.Profile
+	debug     bool
 }
 
-func NewPipeline(store *storage.Storage, jobID string, profile config.Profile) *Pipeline {
+func NewPipeline(store *storage.Storage, jobID string, profile config.Profile, debug ...bool) *Pipeline {
 	home, _ := os.UserHomeDir()
 	outputDir := filepath.Join(home, ".recond", "jobs", jobID)
+
+	d := false
+	if len(debug) > 0 {
+		d = debug[0]
+	}
 
 	return &Pipeline{
 		store:     store,
@@ -59,7 +67,20 @@ func NewPipeline(store *storage.Storage, jobID string, profile config.Profile) *
 		registry:  runner.NewRegistry(),
 		outputDir: outputDir,
 		profile:   profile,
+		debug:     d,
 	}
+}
+
+func (p *Pipeline) debugLog(stepID string, msg string) {
+	if !p.debug {
+		return
+	}
+	p.store.InsertLog(context.Background(), models.Log{
+		JobID:   p.jobID,
+		StepID:  stepID,
+		Level:   models.LogDebug,
+		Message: msg,
+	})
 }
 
 func (p *Pipeline) Execute(ctx context.Context) error {
@@ -79,6 +100,12 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 	log.Printf("[pipeline] concurrency=%d rate_limit=%d timeout=%v cpu_max=%d ram_max=%s",
 		p.profile.Concurrency, p.profile.RateLimit, p.profile.Timeout, p.profile.CPUMax, p.profile.RAMMax)
 
+	if p.debug {
+		p.debugLog("", fmt.Sprintf("debug mode enabled for job %s", p.jobID))
+		p.debugLog("", fmt.Sprintf("target: %s, profile: %s", job.Target, p.profile.Name))
+		p.debugLog("", fmt.Sprintf("output directory: %s", p.outputDir))
+	}
+
 	for _, step := range steps {
 		select {
 		case <-ctx.Done():
@@ -88,10 +115,12 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 
 		if step.Status == models.StepStatusCompleted || step.Status == models.StepStatusSkipped {
 			log.Printf("[pipeline] skipping completed step: %s", step.Name)
+			p.debugLog(step.ID, fmt.Sprintf("skipping completed step: %s", step.Name))
 			continue
 		}
 
 		log.Printf("[pipeline] starting step: %s (tool: %s)", step.Name, step.Tool)
+		p.debugLog(step.ID, fmt.Sprintf("starting step: %s (tool: %s)", step.Name, step.Tool))
 
 		if step.Status != models.StepStatusRunning {
 			p.store.UpdateStepStatus(ctx, step.ID, models.StepStatusRunning)
@@ -121,10 +150,12 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 			Level:   models.LogInfo,
 			Message: fmt.Sprintf("step %s completed", step.Name),
 		})
+		p.debugLog(step.ID, fmt.Sprintf("step %s completed successfully", step.Name))
 		log.Printf("[pipeline] completed step: %s", step.Name)
 	}
 
 	log.Printf("[pipeline] job %s completed successfully", p.jobID)
+	p.debugLog("", fmt.Sprintf("job %s completed successfully", p.jobID))
 	return nil
 }
 
@@ -161,6 +192,16 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 
 	executor := runner.NewExecutor(r, opts)
 
+	if p.debug {
+		executor.OnDebug(func(msg string) {
+			p.debugLog(step.ID, msg)
+		})
+		p.debugLog(step.ID, fmt.Sprintf("input file: %s", inputFile))
+		p.debugLog(step.ID, fmt.Sprintf("output file: %s", outputFile))
+		p.debugLog(step.ID, fmt.Sprintf("opts: concurrency=%d rate_limit=%d timeout=%v",
+			opts.Concurrency, opts.RateLimit, opts.Timeout))
+	}
+
 	p.store.InsertLog(ctx, models.Log{
 		JobID:   p.jobID,
 		StepID:  step.ID,
@@ -194,7 +235,14 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 	close(progressCh)
 
 	if err != nil {
+		p.debugLog(step.ID, fmt.Sprintf("step %s failed: %v", step.Name, err))
 		return err
+	}
+
+	if step.Tool == "httpx" {
+		if err := p.extractAliveHosts(step.ID, outputFile); err != nil {
+			p.debugLog(step.ID, fmt.Sprintf("failed to extract alive hosts: %v", err))
+		}
 	}
 
 	p.store.UpdateStepProgress(ctx, step.ID, 100, len(result.Items), len(result.Items))
@@ -230,6 +278,9 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 	cpJSON, _ := json.Marshal(cpData)
 	p.store.UpdateStepCheckpoint(ctx, step.ID, string(cpJSON))
 
+	p.debugLog(step.ID, fmt.Sprintf("found %d items in %s", len(result.Items), step.Tool))
+	p.debugLog(step.ID, fmt.Sprintf("output saved to: %s", result.OutputPath))
+
 	p.store.InsertLog(ctx, models.Log{
 		JobID:   p.jobID,
 		StepID:  step.ID,
@@ -238,6 +289,48 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 	})
 
 	return nil
+}
+
+func (p *Pipeline) extractAliveHosts(stepID string, httpxOutput string) error {
+	httpxFile, err := os.Open(httpxOutput)
+	if err != nil {
+		return fmt.Errorf("failed to open httpx output: %w", err)
+	}
+	defer httpxFile.Close()
+
+	aliveFile := filepath.Join(p.outputDir, "alive.txt")
+	f, err := os.Create(aliveFile)
+	if err != nil {
+		return fmt.Errorf("failed to create alive.txt: %w", err)
+	}
+	defer f.Close()
+
+	seen := make(map[string]bool)
+	scanner := bufio.NewScanner(httpxFile)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) > 0 && strings.HasPrefix(parts[0], "http") {
+			url := parts[0]
+			if !seen[url] {
+				seen[url] = true
+				f.WriteString(url + "\n")
+			}
+		}
+	}
+
+	p.debugLog(stepID, fmt.Sprintf("extracted %d alive URLs to %s", len(seen), aliveFile))
+	p.store.InsertLog(context.Background(), models.Log{
+		JobID:   p.jobID,
+		StepID:  stepID,
+		Level:   models.LogInfo,
+		Message: fmt.Sprintf("extracted %d alive URLs to alive.txt", len(seen)),
+	})
+
+	return scanner.Err()
 }
 
 func (p *Pipeline) getStepInput(step models.Step) (string, error) {
@@ -251,21 +344,21 @@ func (p *Pipeline) getStepInput(step models.Step) (string, error) {
 		}
 		return prev, nil
 	case "katana":
-		prev := filepath.Join(p.outputDir, "httpx.txt")
+		prev := filepath.Join(p.outputDir, "alive.txt")
 		if _, err := os.Stat(prev); os.IsNotExist(err) {
-			return "", fmt.Errorf("httpx output not found: %s", prev)
+			return "", fmt.Errorf("alive hosts not found: %s (run httpx first)", prev)
 		}
 		return prev, nil
 	case "gau":
-		prev := filepath.Join(p.outputDir, "httpx.txt")
+		prev := filepath.Join(p.outputDir, "alive.txt")
 		if _, err := os.Stat(prev); os.IsNotExist(err) {
-			return "", fmt.Errorf("httpx output not found: %s", prev)
+			return "", fmt.Errorf("alive hosts not found: %s (run httpx first)", prev)
 		}
 		return prev, nil
 	case "ffuf":
-		prev := filepath.Join(p.outputDir, "httpx.txt")
+		prev := filepath.Join(p.outputDir, "alive.txt")
 		if _, err := os.Stat(prev); os.IsNotExist(err) {
-			return "", fmt.Errorf("httpx output not found: %s", prev)
+			return "", fmt.Errorf("alive hosts not found: %s (run httpx first)", prev)
 		}
 		lines, err := runner.ReadInputLines(prev)
 		if err != nil {

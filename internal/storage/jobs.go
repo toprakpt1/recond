@@ -9,20 +9,20 @@ import (
 
 func (s *Storage) CreateJob(ctx context.Context, job models.Job) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs (id, name, target, status, profile, config_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		job.ID, job.Name, job.Target, job.Status, job.Profile, job.ConfigJSON,
+		`INSERT INTO jobs (id, name, target, status, profile, debug, config_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.Name, job.Target, job.Status, job.Profile, job.Debug, job.ConfigJSON,
 		job.CreatedAt, job.UpdatedAt)
 	return err
 }
 
 func (s *Storage) GetJob(ctx context.Context, id string) (*models.Job, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, target, status, profile, COALESCE(config_json,''), created_at, updated_at
+		`SELECT id, name, target, status, profile, debug, COALESCE(config_json,''), created_at, updated_at
 		FROM jobs WHERE id = ?`, id)
 
 	job := &models.Job{}
-	err := row.Scan(&job.ID, &job.Name, &job.Target, &job.Status, &job.Profile, &job.ConfigJSON,
+	err := row.Scan(&job.ID, &job.Name, &job.Target, &job.Status, &job.Profile, &job.Debug, &job.ConfigJSON,
 		&job.CreatedAt, &job.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (s *Storage) GetJob(ctx context.Context, id string) (*models.Job, error) {
 }
 
 func (s *Storage) ListJobs(ctx context.Context, status string) ([]models.Job, error) {
-	query := `SELECT id, name, target, status, profile, COALESCE(config_json,''), created_at, updated_at FROM jobs`
+	query := `SELECT id, name, target, status, profile, debug, COALESCE(config_json,''), created_at, updated_at FROM jobs`
 	args := []interface{}{}
 
 	if status != "" {
@@ -49,7 +49,7 @@ func (s *Storage) ListJobs(ctx context.Context, status string) ([]models.Job, er
 	var jobs []models.Job
 	for rows.Next() {
 		var j models.Job
-		if err := rows.Scan(&j.ID, &j.Name, &j.Target, &j.Status, &j.Profile, &j.ConfigJSON,
+		if err := rows.Scan(&j.ID, &j.Name, &j.Target, &j.Status, &j.Profile, &j.Debug, &j.ConfigJSON,
 			&j.CreatedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}

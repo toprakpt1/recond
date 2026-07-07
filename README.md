@@ -41,22 +41,22 @@
 # Clone and build
 git clone https://github.com/toprakpt1/recond.git
 cd recond
-make build
-
-# Start the daemon
-setsid ./bin/recond &
+make install
 
 # Initialize config
-./bin/recon config init
+recon config init
+
+# Start the daemon
+setsid recond &
 
 # Run a recon job
-./bin/recon start example.com --profile safe
+recon start example.com --profile safe
 
 # Check status
-./bin/recon status <job-id>
+recon status <job-id>
 
 # Export results
-./bin/recon export <job-id> --type subdomains -o subdomains.txt
+recon export <job-id> --type subdomains -o subdomains.txt
 ```
 
 ## Installation
@@ -68,22 +68,24 @@ setsid ./bin/recond &
 ```sh
 git clone https://github.com/toprakpt1/recond.git
 cd recond
-make build
+make install
 ```
 
-This builds two binaries into `bin/`:
+`make install` builds both binaries and copies them to `/usr/local/bin`:
 
 | Binary | Description |
 |--------|-------------|
-| `bin/recond` | Daemon — long-running process that manages jobs |
-| `bin/recon` | CLI — sends commands to daemon via Unix socket |
+| `recond` | Daemon — long-running process that manages jobs |
+| `recon` | CLI — sends commands to daemon via Unix socket |
 
 ### Makefile Commands
 
 ```sh
-make build          # Build both recond and recon binaries
+make build          # Build both recond and recon binaries to bin/
 make build-daemon   # Build only the daemon
 make build-cli      # Build only the CLI
+make install        # Build and install to /usr/local/bin
+make uninstall      # Remove from /usr/local/bin
 make run-daemon     # Build and run daemon in foreground
 make run-cli        # Build and run CLI
 make test           # Run all tests (go test ./...)
@@ -118,10 +120,10 @@ The following tools must be installed and available in your `$PATH`:
 
 ```sh
 # Start in background (recommended)
-setsid ./bin/recond &
+setsid recond &
 
 # Start in foreground (useful for debugging)
-./bin/recond
+recond
 ```
 
 The daemon listens on a Unix socket at `~/.recond/recond.sock` and stores all data in `~/.recond/recond.db`.
@@ -132,68 +134,68 @@ The daemon listens on a Unix socket at `~/.recond/recond.sock` and stores all da
 
 ```sh
 # Start a recon job
-./bin/recon start example.com
-./bin/recon start example.com --profile safe
-./bin/recon start example.com --profile aggressive
+recon start example.com
+recon start example.com --profile safe
+recon start example.com --profile aggressive
 
 # Check job status (shows per-step progress)
-./bin/recon status <job-id>
+recon status <job-id>
 
 # List all jobs
-./bin/recon list
-./bin/recon list --status running
-./bin/recon list --status completed
+recon list
+recon list --status running
+recon list --status completed
 
 # Pause / Resume / Stop
-./bin/recon pause <job-id>
-./bin/recon resume <job-id>
-./bin/recon stop <job-id>
+recon pause <job-id>
+recon resume <job-id>
+recon stop <job-id>
 
 # Delete jobs
-./bin/recon delete <job-id>
-./bin/recon delete --completed          # Delete all completed jobs
+recon delete <job-id>
+recon delete --completed          # Delete all completed jobs
 
 # Retry a job (creates a new job)
-./bin/recon retry <job-id>
-./bin/recon retry <job-id> --from-step alive-check   # Skip completed steps
+recon retry <job-id>
+recon retry <job-id> --from-step alive-check   # Skip completed steps
 
 # Duplicate a job
-./bin/recon duplicate <job-id>
+recon duplicate <job-id>
 ```
 
 #### Logs
 
 ```sh
 # View all logs for a job
-./bin/recon logs <job-id>
+recon logs <job-id>
 
 # Follow logs in real-time
-./bin/recon logs <job-id> --follow
+recon logs <job-id> --follow
 
 # Filter by step
-./bin/recon logs <job-id> --step subdomain-discovery
+recon logs <job-id> --step subdomain-discovery
 
 # Search logs
-./bin/recon logs <job-id> --search "error"
+recon logs <job-id> --search "error"
 
 # Export logs to file
-./bin/recon logs <job-id> --export logs.json
+recon logs <job-id> --export logs.json
 ```
 
 #### Export
 
 ```sh
 # Export subdomains (text, default)
-./bin/recon export <job-id> --type subdomains
+recon export <job-id> --type subdomains
 
 # Export alive hosts as JSON
-./bin/recon export <job-id> --type alive --format json
+recon export <job-id> --type alive --format json
 
 # Export URLs as CSV to file
-./bin/recon export <job-id> --type urls --format csv -o urls.csv
+recon export <job-id> --type urls --format csv -o urls.csv
 
 # List available outputs
-./bin/recon outputs <job-id>
+recon outputs <job-id>
 ```
 
 | Export Type | Source Tool | Output File |
@@ -207,51 +209,51 @@ The daemon listens on a Unix socket at `~/.recond/recond.sock` and stores all da
 
 ```sh
 # List built-in templates
-./bin/recon templates list
+recon templates list
 
 # Show template details
-./bin/recon templates show full-recon
+recon templates show full-recon
 
 # Create custom template from YAML file
-./bin/recon templates create my-template --file template.yaml
+recon templates create my-template --file template.yaml
 
 # Delete a custom template
-./bin/recon templates delete my-template
+recon templates delete my-template
 ```
 
 #### Profiles
 
 ```sh
 # List all profiles
-./bin/recon config profiles list
+recon config profiles list
 
 # Show profile details
-./bin/recon config profiles show safe
+recon config profiles show safe
 
 # Create a custom profile
-./bin/recon config profiles create custom --concurrency 10 --rate-limit 50
+recon config profiles create custom --concurrency 10 --rate-limit 50
 
 # Delete a custom profile
-./bin/recon config profiles delete custom
+recon config profiles delete custom
 ```
 
 #### Config & Daemon
 
 ```sh
 # Initialize default config
-./bin/recon config init
+recon config init
 
 # Show current config
-./bin/recon config show
+recon config show
 
 # Set a config value
-./bin/recon config set default_profile safe
+recon config set default_profile safe
 
 # Daemon management
-./bin/recon daemon start
-./bin/recon daemon stop
-./bin/recon daemon status
-./bin/recon daemon health
+recon daemon start
+recon daemon stop
+recon daemon status
+recon daemon health
 ```
 
 ## Configuration

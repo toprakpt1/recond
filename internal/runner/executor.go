@@ -24,12 +24,25 @@ type Executor struct {
 	processed  int64
 	total      int64
 	mu         sync.Mutex
+	onDebug    func(string)
 }
 
 func NewExecutor(runner Runner, opts RunOptions) *Executor {
 	return &Executor{
 		runner: runner,
 		opts:   opts,
+	}
+}
+
+func (e *Executor) OnDebug(fn func(string)) {
+	e.onDebug = fn
+}
+
+func (e *Executor) debugf(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	log.Println(msg)
+	if e.onDebug != nil {
+		e.onDebug(msg)
 	}
 }
 
@@ -47,7 +60,7 @@ func (e *Executor) RunWithRetry(ctx context.Context, maxRetries int, backoff tim
 				expBackoff = 30 * time.Second
 			}
 
-			log.Printf("[executor] retry %d/%d after %v", attempt, maxRetries, expBackoff)
+			e.debugf("[executor] retry %d/%d after %v", attempt, maxRetries, expBackoff)
 
 			select {
 			case <-ctx.Done():
@@ -62,7 +75,7 @@ func (e *Executor) RunWithRetry(ctx context.Context, maxRetries int, backoff tim
 		}
 
 		lastErr = err
-		log.Printf("[executor] attempt %d failed: %v", attempt+1, err)
+		e.debugf("[executor] attempt %d failed: %v", attempt+1, err)
 	}
 
 	return nil, fmt.Errorf("all %d retries failed: %w", maxRetries+1, lastErr)
@@ -85,7 +98,7 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 	}
 	defer outFile.Close()
 
-	log.Printf("[executor] running: %s", strings.Join(args, " "))
+	e.debugf("[executor] running: %s", strings.Join(args, " "))
 
 	e.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	e.cmd.Stdout = outFile
@@ -104,7 +117,7 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 	var execErr error
 	select {
 	case <-ctx.Done():
-		log.Printf("[executor] context cancelled, killing process %d", e.cmd.Process.Pid)
+		e.debugf("[executor] context cancelled, killing process %d", e.cmd.Process.Pid)
 		syscall.Kill(-e.cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-time.After(5 * time.Second):
@@ -131,7 +144,7 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 
 	e.processed = int64(len(items))
 
-	log.Printf("[executor] completed: %d items, output: %s", len(items), e.outputFile)
+	e.debugf("[executor] completed: %d items, output: %s", len(items), e.outputFile)
 
 	return &StepResult{
 		Items:      items,

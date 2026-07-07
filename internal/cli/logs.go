@@ -56,7 +56,7 @@ var logsCmd = &cobra.Command{
 		}
 
 		data := resp.Data.(map[string]interface{})
-		logs := data["logs"].([]interface{})
+		logs, _ := data["logs"].([]interface{})
 
 		if len(logs) == 0 {
 			fmt.Println("No logs found")

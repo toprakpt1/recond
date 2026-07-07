@@ -19,6 +19,7 @@ type Job struct {
 	Target     string    `json:"target"`
 	Status     JobStatus `json:"status"`
 	Profile    string    `json:"profile"`
+	Debug      bool      `json:"debug"`
 	ConfigJSON string    `json:"config_json,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`

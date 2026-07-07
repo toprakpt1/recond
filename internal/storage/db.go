@@ -113,5 +113,11 @@ func (s *Storage) migrate() error {
 			return err
 		}
 	}
+
+	// Add debug column if it doesn't exist (for existing databases)
+	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN debug INTEGER DEFAULT 0`); err != nil {
+		// Ignore error if column already exists
+	}
+
 	return nil
 }

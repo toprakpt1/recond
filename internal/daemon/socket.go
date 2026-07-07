@@ -18,6 +18,7 @@ type Response struct {
 type StartRequest struct {
 	Target  string `json:"target"`
 	Profile string `json:"profile,omitempty"`
+	Debug   bool   `json:"debug,omitempty"`
 }
 
 type ActionRequest struct {

@@ -30,7 +30,14 @@ var daemonStartCmd = &cobra.Command{
 			daemonPath = "recond"
 		}
 
-		daemonExe := exec.Command(daemonPath)
+		debug, _ := cmd.Flags().GetBool("debug")
+
+		cmdArgs := []string{}
+		if debug {
+			cmdArgs = append(cmdArgs, "--debug")
+		}
+
+		daemonExe := exec.Command(daemonPath, cmdArgs...)
 		daemonExe.Stdout = nil
 		daemonExe.Stderr = nil
 
@@ -40,6 +47,9 @@ var daemonStartCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Daemon started (PID: %d)\n", daemonExe.Process.Pid)
+		if debug {
+			fmt.Println("Debug mode enabled")
+		}
 	},
 }
 
@@ -121,6 +131,7 @@ var daemonHealthCmd = &cobra.Command{
 }
 
 func init() {
+	daemonStartCmd.Flags().Bool("debug", false, "Start daemon with debug logging")
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)

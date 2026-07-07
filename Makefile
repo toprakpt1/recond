@@ -1,6 +1,7 @@
-.PHONY: all build build-daemon build-cli clean run-daemon run-cli test lint
+.PHONY: all build build-daemon build-cli clean run-daemon run-cli test lint install uninstall
 
 BINARY_DIR = bin
+INSTALL_DIR = /usr/local/bin
 VERSION    ?= dev
 COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 DATE       ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -24,6 +25,16 @@ run-daemon: build-daemon
 
 run-cli: build-cli
 	./$(BINARY_DIR)/recon
+
+install: build
+	install -d $(INSTALL_DIR)
+	install -m 755 $(BINARY_DIR)/recond $(INSTALL_DIR)/recond
+	install -m 755 $(BINARY_DIR)/recon $(INSTALL_DIR)/recon
+	@echo "Installed to $(INSTALL_DIR)/recond and $(INSTALL_DIR)/recon"
+
+uninstall:
+	rm -f $(INSTALL_DIR)/recond $(INSTALL_DIR)/recon
+	@echo "Removed from $(INSTALL_DIR)"
 
 clean:
 	rm -rf $(BINARY_DIR)

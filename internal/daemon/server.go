@@ -30,9 +30,10 @@ type Daemon struct {
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 	activeJobs map[string]context.CancelFunc
+	debug      bool
 }
 
-func New() (*Daemon, error) {
+func New(debug bool) (*Daemon, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
@@ -52,6 +53,7 @@ func New() (*Daemon, error) {
 		cfg:        cfg,
 		registry:   runner.NewRegistry(),
 		activeJobs: make(map[string]context.CancelFunc),
+		debug:      debug,
 	}, nil
 }
 
@@ -223,6 +225,7 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 		Target:    req.Target,
 		Status:    models.JobStatusRunning,
 		Profile:   req.Profile,
+		Debug:     req.Debug,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -258,7 +261,7 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, jobID, profile)
+		p := pipeline.NewPipeline(d.store, jobID, profile, d.debug || req.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), jobID, models.JobStatusPaused)
@@ -379,7 +382,7 @@ func (d *Daemon) handleResume(ctx context.Context, payload json.RawMessage) Resp
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, req.JobID, profile)
+		p := pipeline.NewPipeline(d.store, req.JobID, profile, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), req.JobID, models.JobStatusPaused)
@@ -906,6 +909,7 @@ func (d *Daemon) handleRetry(ctx context.Context, payload json.RawMessage) Respo
 		Target:    job.Target,
 		Status:    models.JobStatusRunning,
 		Profile:   profileName,
+		Debug:     job.Debug,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -944,7 +948,7 @@ func (d *Daemon) handleRetry(ctx context.Context, payload json.RawMessage) Respo
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, newJobID, profile)
+		p := pipeline.NewPipeline(d.store, newJobID, profile, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)
@@ -998,6 +1002,7 @@ func (d *Daemon) handleDuplicate(ctx context.Context, payload json.RawMessage) R
 		Target:    job.Target,
 		Status:    models.JobStatusRunning,
 		Profile:   profileName,
+		Debug:     job.Debug,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -1033,7 +1038,7 @@ func (d *Daemon) handleDuplicate(ctx context.Context, payload json.RawMessage) R
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, newJobID, profile)
+		p := pipeline.NewPipeline(d.store, newJobID, profile, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)
