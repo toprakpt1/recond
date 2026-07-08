@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -103,7 +102,7 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 	e.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	e.cmd.Stdout = outFile
 	e.cmd.Stderr = &e.stderr
-	e.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setupSysProcAttr(e.cmd)
 
 	if err := e.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start command: %w", err)
@@ -118,10 +117,10 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 	select {
 	case <-ctx.Done():
 		e.debugf("[executor] context cancelled, killing process %d", e.cmd.Process.Pid)
-		syscall.Kill(-e.cmd.Process.Pid, syscall.SIGTERM)
+		sendTermSignal(e.cmd.Process.Pid)
 		select {
 		case <-time.After(5 * time.Second):
-			syscall.Kill(-e.cmd.Process.Pid, syscall.SIGKILL)
+			sendKillSignal(e.cmd.Process.Pid)
 		case <-done:
 		}
 		execErr = ctx.Err()
