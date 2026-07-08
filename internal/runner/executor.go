@@ -91,7 +91,12 @@ func (e *Executor) runOnce(ctx context.Context) (*StepResult, error) {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	outFile, err := os.Create(e.outputFile)
+	var outFile *os.File
+	if e.opts.IsResume {
+		outFile, err = os.OpenFile(e.outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	} else {
+		outFile, err = os.Create(e.outputFile)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create output file: %w", err)
 	}

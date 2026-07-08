@@ -261,7 +261,7 @@ func (d *Daemon) handleStart(ctx context.Context, payload json.RawMessage) Respo
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, jobID, profile, d.debug || req.Debug)
+		p := pipeline.NewPipeline(d.store, jobID, profile, false, d.debug || req.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), jobID, models.JobStatusPaused)
@@ -382,7 +382,7 @@ func (d *Daemon) handleResume(ctx context.Context, payload json.RawMessage) Resp
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, req.JobID, profile, d.debug || job.Debug)
+		p := pipeline.NewPipeline(d.store, req.JobID, profile, true, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), req.JobID, models.JobStatusPaused)
@@ -948,7 +948,7 @@ func (d *Daemon) handleRetry(ctx context.Context, payload json.RawMessage) Respo
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, newJobID, profile, d.debug || job.Debug)
+		p := pipeline.NewPipeline(d.store, newJobID, profile, false, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)
@@ -1038,7 +1038,7 @@ func (d *Daemon) handleDuplicate(ctx context.Context, payload json.RawMessage) R
 			d.mu.Unlock()
 		}()
 
-		p := pipeline.NewPipeline(d.store, newJobID, profile, d.debug || job.Debug)
+		p := pipeline.NewPipeline(d.store, newJobID, profile, false, d.debug || job.Debug)
 		if err := p.Execute(jobCtx); err != nil {
 			if err == context.Canceled {
 				d.store.UpdateJobStatus(context.Background(), newJobID, models.JobStatusPaused)

@@ -25,7 +25,7 @@
 - **5 Tool Support** — subfinder, httpx, katana, gau, ffuf with automatic data flow between steps
 - **Pipeline System** — Tools are chained into sequential steps; each step reads from the previous step's output
 - **Pause / Resume / Stop** — Full lifecycle control over running jobs with context cancellation
-- **Checkpoint-based Recovery** — Resume crashed jobs from last completed step
+- **Smart Resume** — httpx/katana use `-resume` flag with `resume.cfg`; ffuf skips already-fuzzed subdomains via checkpoint
 - **Resource Profiles** — `safe`, `balanced`, `aggressive` presets with concurrency, rate limits, CPU/RAM limits, and timeouts
 - **Custom Profiles** — Define your own profiles with `recon config profiles create`
 - **Template Engine** — 5 built-in YAML pipeline templates + create your own
@@ -407,8 +407,10 @@ subfinder (target)           → subfinder.txt (subdomains)
   └─ httpx (subfinder.txt)   → httpx.txt (alive hosts)
        ├─ katana (httpx.txt) → katana.txt (crawled URLs)
        ├─ gau (httpx.txt)    → gau.txt (discovered URLs)
-       └─ ffuf (httpx.txt)   → directories.json (fuzzed dirs)
+       └─ ffuf (per-domain)  → directories.json (fuzzed dirs)
 ```
+
+ffuf runs separately for each subdomain in `alive.txt`, merging results into `directories.json`.
 
 ### SQLite Schema
 
@@ -427,6 +429,7 @@ subfinder (target)           → subfinder.txt (subdomains)
 - On pause/stop: SIGTERM sent to process group, SIGKILL after 5s timeout
 - Retry: exponential backoff (2s → 4s → 8s, max 30s), 3 attempts total
 - Progress: polled every 3s during execution
+- Resume: httpx/katana use `-resume` flag (reads `resume.cfg`); ffuf skips completed domains via checkpoint; subfinder/gau restart from beginning
 
 ## Project Structure
 

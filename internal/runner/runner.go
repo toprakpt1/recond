@@ -20,6 +20,7 @@ type RunOptions struct {
 	RateLimit   int
 	Timeout     time.Duration
 	Wordlist    string
+	IsResume    bool
 }
 
 type StepResult struct {

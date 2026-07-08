@@ -70,6 +70,22 @@ Tools are executed via `internal/runner/executor.go`:
 - Output files stored at `~/.recond/jobs/<job-id>/`
 - Each tool writes to its own output file (e.g., `subfinder.txt`, `httpx.txt`)
 
+### Resume Behavior
+
+When a job is resumed (`recon resume`), tools continue from where they left off instead of restarting:
+
+| Tool | Resume Method | Details |
+|------|--------------|---------|
+| httpx | `-resume` flag | Uses `resume.cfg` state file |
+| katana | `-resume` flag | Uses `resume.cfg` state file |
+| subfinder | No resume support | Restarts from beginning (fast tool) |
+| ffuf | Checkpoint-based | Iterates alive.txt domains, skips completed ones via checkpoint |
+| gau | No resume support | Restarts from beginning (planned: fork with `-resume`) |
+
+- Executor uses append mode (`O_APPEND`) instead of truncate when `IsResume=true`
+- Pipeline preserves checkpoint data on resume instead of clearing it
+- ffuf checkpoint tracks `completed_domains` list to skip already-fuzzed subdomains
+
 ### Wordlist (ffuf)
 
 ffuf requires a wordlist file. Configured via `wordlist` in config or per-profile:
@@ -84,6 +100,15 @@ subfinder → subfinder.txt → httpx → httpx.txt → katana/gau → katana.tx
 ```
 
 Each step reads from the previous step's output file. Pipeline skips completed steps on resume.
+
+### ffuf Multi-Domain Execution
+
+ffuf iterates over each subdomain in `alive.txt` individually:
+1. Reads all alive subdomains from `alive.txt`
+2. Checks checkpoint for already-completed domains
+3. Runs ffuf for each remaining domain sequentially
+4. Updates checkpoint after each domain completes
+5. Merges all results into `directories.json` at the end
 
 ## Resource Profiles
 

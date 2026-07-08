@@ -46,6 +46,10 @@ func (r *HttpxRunner) BuildCommand(opts RunOptions) ([]string, error) {
 		args = append(args, "-timeout", fmt.Sprintf("%d", int(opts.Timeout.Seconds())))
 	}
 
+	if opts.IsResume {
+		args = append(args, "-resume")
+	}
+
 	args = append(args, "-follow-redirects", "-status-code", "-content-length")
 
 	return args, nil

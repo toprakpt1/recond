@@ -50,9 +50,10 @@ type Pipeline struct {
 	outputDir string
 	profile   config.Profile
 	debug     bool
+	isResume  bool
 }
 
-func NewPipeline(store *storage.Storage, jobID string, profile config.Profile, debug ...bool) *Pipeline {
+func NewPipeline(store *storage.Storage, jobID string, profile config.Profile, isResume bool, debug ...bool) *Pipeline {
 	home, _ := os.UserHomeDir()
 	outputDir := filepath.Join(home, ".recond", "jobs", jobID)
 
@@ -68,6 +69,7 @@ func NewPipeline(store *storage.Storage, jobID string, profile config.Profile, d
 		outputDir: outputDir,
 		profile:   profile,
 		debug:     d,
+		isResume:  isResume,
 	}
 }
 
@@ -124,7 +126,9 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 
 		if step.Status != models.StepStatusRunning {
 			p.store.UpdateStepStatus(ctx, step.ID, models.StepStatusRunning)
-			p.store.UpdateStepCheckpoint(ctx, step.ID, "")
+			if !p.isResume {
+				p.store.UpdateStepCheckpoint(ctx, step.ID, "")
+			}
 		}
 
 		if err := p.executeStep(ctx, job, step); err != nil {
@@ -160,6 +164,10 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 }
 
 func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models.Step) error {
+	if step.Tool == "ffuf" {
+		return p.executeFfufStep(ctx, job, step)
+	}
+
 	r, err := p.registry.Get(step.Tool)
 	if err != nil {
 		return err
@@ -175,9 +183,6 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 	}
 
 	outputFile := filepath.Join(p.outputDir, step.Tool+".txt")
-	if step.Tool == "ffuf" {
-		outputFile = filepath.Join(p.outputDir, "directories.json")
-	}
 
 	opts := runner.RunOptions{
 		Target:      job.Target,
@@ -188,6 +193,7 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 		RateLimit:   p.profile.RateLimit,
 		Timeout:     p.profile.Timeout,
 		Wordlist:    p.profile.Wordlist,
+		IsResume:    p.isResume,
 	}
 
 	executor := runner.NewExecutor(r, opts)
@@ -286,6 +292,171 @@ func (p *Pipeline) executeStep(ctx context.Context, job *models.Job, step models
 		StepID:  step.ID,
 		Level:   models.LogInfo,
 		Message: fmt.Sprintf("found %d items in %s", len(result.Items), step.Tool),
+	})
+
+	return nil
+}
+
+type ffufCheckpoint struct {
+	CompletedDomains []string `json:"completed_domains"`
+	TotalDomains     int      `json:"total_domains"`
+	CompletedCount   int      `json:"completed_count"`
+}
+
+func (p *Pipeline) executeFfufStep(ctx context.Context, job *models.Job, step models.Step) error {
+	r, err := p.registry.Get("ffuf")
+	if err != nil {
+		return err
+	}
+	if !r.IsInstalled() {
+		return fmt.Errorf("tool ffuf is not installed. install it and try again")
+	}
+
+	aliveFile := filepath.Join(p.outputDir, "alive.txt")
+	if _, err := os.Stat(aliveFile); os.IsNotExist(err) {
+		return fmt.Errorf("alive hosts not found: %s (run httpx first)", aliveFile)
+	}
+
+	domains, err := runner.ReadInputLines(aliveFile)
+	if err != nil {
+		return fmt.Errorf("failed to read alive.txt: %w", err)
+	}
+	if len(domains) == 0 {
+		return fmt.Errorf("no alive hosts found for ffuf")
+	}
+
+	completedDomains := make(map[string]bool)
+	if p.isResume && step.CheckpointJSON != "" {
+		var cp ffufCheckpoint
+		if err := json.Unmarshal([]byte(step.CheckpointJSON), &cp); err == nil {
+			for _, d := range cp.CompletedDomains {
+				completedDomains[d] = true
+			}
+			p.debugLog(step.ID, fmt.Sprintf("ffuf resume: %d/%d domains already completed", cp.CompletedCount, cp.TotalDomains))
+		}
+	}
+
+	outputFile := filepath.Join(p.outputDir, "directories.json")
+
+	var allResults []map[string]interface{}
+	totalFound := 0
+
+	for i, domain := range domains {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if completedDomains[domain] {
+			p.debugLog(step.ID, fmt.Sprintf("ffuf: skipping already completed domain %s", domain))
+			continue
+		}
+
+		p.debugLog(step.ID, fmt.Sprintf("ffuf: processing domain %d/%d: %s", i+1, len(domains), domain))
+		p.store.InsertLog(ctx, models.Log{
+			JobID:   p.jobID,
+			StepID:  step.ID,
+			Level:   models.LogInfo,
+			Message: fmt.Sprintf("ffuf: processing domain %s (%d/%d)", domain, i+1, len(domains)),
+		})
+
+		domainOutput := filepath.Join(p.outputDir, fmt.Sprintf("ffuf_%d.json", i))
+
+		opts := runner.RunOptions{
+			Target:      domain,
+			InputFile:   aliveFile,
+			OutputFile:  domainOutput,
+			OutputDir:   p.outputDir,
+			Concurrency: p.profile.Concurrency,
+			RateLimit:   p.profile.RateLimit,
+			Timeout:     p.profile.Timeout,
+			Wordlist:    p.profile.Wordlist,
+			IsResume:    false,
+		}
+
+		executor := runner.NewExecutor(r, opts)
+		if p.debug {
+			executor.OnDebug(func(msg string) {
+				p.debugLog(step.ID, msg)
+			})
+		}
+
+		result, err := executor.Run(ctx)
+		if err != nil {
+			p.debugLog(step.ID, fmt.Sprintf("ffuf failed for domain %s: %v", domain, err))
+			p.store.InsertLog(ctx, models.Log{
+				JobID:   p.jobID,
+				StepID:  step.ID,
+				Level:   models.LogError,
+				Message: fmt.Sprintf("ffuf failed for domain %s: %v", domain, err),
+			})
+			continue
+		}
+
+		for _, item := range result.Items {
+			allResults = append(allResults, map[string]interface{}{
+				"url":    item,
+				"domain": domain,
+			})
+		}
+		totalFound += len(result.Items)
+
+		completedDomains[domain] = true
+		cpData := ffufCheckpoint{
+			TotalDomains:   len(domains),
+			CompletedCount: len(completedDomains),
+		}
+		for d := range completedDomains {
+			cpData.CompletedDomains = append(cpData.CompletedDomains, d)
+		}
+		cpJSON, _ := json.Marshal(cpData)
+		p.store.UpdateStepCheckpoint(ctx, step.ID, string(cpJSON))
+
+		p.store.UpdateStepProgress(ctx, step.ID, float64(len(completedDomains))/float64(len(domains))*100, len(completedDomains), len(domains))
+
+		os.Remove(domainOutput)
+
+		p.debugLog(step.ID, fmt.Sprintf("ffuf: completed domain %s, found %d results", domain, len(result.Items)))
+	}
+
+	mergedData := map[string]interface{}{
+		"results": allResults,
+	}
+	mergedJSON, _ := json.Marshal(mergedData)
+	if err := os.WriteFile(outputFile, mergedJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write merged ffuf output: %w", err)
+	}
+
+	p.store.UpdateStepProgress(ctx, step.ID, 100, len(completedDomains), len(domains))
+
+	p.store.CreateOutput(ctx, models.Output{
+		ID:        fmt.Sprintf("out-%s-%s", step.ID[:8], "ffuf"),
+		JobID:     p.jobID,
+		StepID:    step.ID,
+		Path:      outputFile,
+		Kind:      models.OutputDirectories,
+		SizeBytes: int64(totalFound),
+		CreatedAt: time.Now(),
+	})
+
+	cpData := ffufCheckpoint{
+		CompletedDomains: make([]string, 0, len(completedDomains)),
+		TotalDomains:     len(domains),
+		CompletedCount:   len(completedDomains),
+	}
+	for d := range completedDomains {
+		cpData.CompletedDomains = append(cpData.CompletedDomains, d)
+	}
+	cpJSON, _ := json.Marshal(cpData)
+	p.store.UpdateStepCheckpoint(ctx, step.ID, string(cpJSON))
+
+	p.debugLog(step.ID, fmt.Sprintf("ffuf: completed all domains, found %d total results", totalFound))
+	p.store.InsertLog(ctx, models.Log{
+		JobID:   p.jobID,
+		StepID:  step.ID,
+		Level:   models.LogInfo,
+		Message: fmt.Sprintf("ffuf: completed all domains, found %d total results", totalFound),
 	})
 
 	return nil

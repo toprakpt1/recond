@@ -43,6 +43,10 @@ func (r *KatanaRunner) BuildCommand(opts RunOptions) ([]string, error) {
 		args = append(args, "-timeout", fmt.Sprintf("%d", int(opts.Timeout.Seconds())))
 	}
 
+	if opts.IsResume {
+		args = append(args, "-resume")
+	}
+
 	args = append(args, "-d", "3", "-jc", "-ef", "css,png,jpg,gif,svg,woff,woff2,ico")
 
 	return args, nil
